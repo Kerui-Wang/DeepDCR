@@ -11,11 +11,11 @@ Classification Prediction Path: Multimodal network integrating imaging features 
 
 # System Requirements
 1. Hardware Requirements:
-   GPU: NVIDIA GPU with ≥ 8GB VRAM (Recommended: RTX 3080 or A100)
-   Memory: ≥ 16GB RAM
+   GPU: NVIDIA GPU with ≥ 8GB VRAM (Recommended: RTX 3080 or A100);
+   Memory: ≥ 16GB RAM;
    Storage: ≥ 10GB available space
 2. Software Requirements:
-   Operating System: Ubuntu 18.04+, Windows 10+, or macOS 12+
+   Operating System: Ubuntu 18.04+, Windows 10+, or macOS 12+;
    Python: 3.7-3.10
 
 # Installation & Dependencies
