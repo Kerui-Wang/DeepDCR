@@ -10,21 +10,21 @@ Imaging Segmentation Path: 3D CNN based on nnUNet for precise extraction of lacr
 Classification Prediction Path: Multimodal network integrating imaging features with clinical features, outputting surgical difficulty classification (Normal=0, Difficult=1)
 
 # System Requirements
-Hardware Requirements:
+1.Hardware Requirements:
 GPU: NVIDIA GPU with ≥ 8GB VRAM (Recommended: RTX 3080 or A100)
 Memory: ≥ 16GB RAM
 Storage: ≥ 10GB available space
-Software Requirements:
+2.Software Requirements:
 Operating System: Ubuntu 18.04+, Windows 10+, or macOS 12+
 Python: 3.7-3.10
 
 # Installation & Dependencies
-1. Clone Repository
+1. Clone Repository:
    git clone https://github.com/your-repo/DeepDCR.git
    cd DeepDCR
-2. Install Dependencies
+2. Install Dependencies:
    pip install -r requirements.txt
-3. Download Model Weights
+3. Download Model Weights:
    Model weights are available via Hugging Face Hub:from huggingface_hub import snapshot_download
                                                     snapshot_download(repo_id="kerui7/DeepDCR_model_weight", local_dir="./weights")
 # Data Preparation
