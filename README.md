@@ -40,13 +40,7 @@ data/
 
 # Performance Evaluation
 Performance metrics on independent test set(30 patients):
-
-Metric	           Value	            95% Confidence Interval
-Sensitivity	       100%	                   96.5%-100%
-Specificity	       85.2%	                 79.1%-90.1%
-Accuracy	         91.3%	                 87.2%-94.4%
-AUC	               0.96	                   0.93-0.98
-
+DeepDCR achieved Dice scores of 0.810 (lacrimal sac), 0.834 (maxilla), and 0.825 (nasal cavity). On external testing (n=30), DeepDCR demonstrated an AUC of 0.871 (95% CI: 0.720-0.978) with perfect sensitivity of 100.0% (95% CI: 74.1%-100.0%) and specificity of 73.7% (95% CI: 52.4%-93.3%). 
 
 # Contributing
 We welcome Issues and Pull Requests to improve this project.
@@ -57,4 +51,5 @@ This project is licensed under the MIT License. See LICENSE file for details.
 # Ethics Statement
 This research adheres to medical research ethics guidelines. All data were anonymized and approved by the institutional review board.
 
-# Disclaimer: This model is intended to assist clinical decision-making and should not replace professional medical judgment. Users should make final decisions based on clinical experience and individual patient circumstances.
+# Disclaimer: 
+This model is intended to assist clinical decision-making and should not replace professional medical judgment. Users should make final decisions based on clinical experience and individual patient circumstances.
