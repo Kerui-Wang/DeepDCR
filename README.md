@@ -27,7 +27,8 @@ DeepDCR employs a dual-path architecture:
 2. Install Dependencies:
    ```pip install -r requirements.txt```
 4. Download Model Weights:
-   Model weights are available via Hugging Face Hub:from huggingface_hub import snapshot_download
+   Due to file size limitations, pre-trained model weights are available for download [here (https://huggingface.co/datasets/kerui7/DeepDCR_model_weight)].
+   Model weights are available via Hugging Face Hub: from huggingface_hub import snapshot_download
                                                     ```snapshot_download(repo_id="kerui7/DeepDCR_model_weight", local_dir="./weights")```
 # Data Preparation
 Ensure the following directory structure:
