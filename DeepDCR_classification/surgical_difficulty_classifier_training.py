@@ -103,7 +103,8 @@ class FocalLoss(nn.Module):
 
 # 3. Data Loader
 class CTDataset(Dataset):
-    def __init__(self, image_dir, seg_dir, clinical_csv, transform=None, is_train=True):
+    def __init__(self, image_dir, seg_dir, clinical_csv, transform=None, is_train=True, 
+                 scaler=None, encoder=None, fit_preprocessors=True):
         self.image_dir = image_dir
         self.seg_dir = seg_dir
         self.clinical_csv = clinical_csv
@@ -124,13 +125,18 @@ class CTDataset(Dataset):
         self.labels = [self.clinical_data[cid].get('difficulty', 0) for cid in self.valid_case_ids]
 
         # Clinical data preprocessing
-        self.scaler, self.encoder = self._fit_preprocessors()
+        if fit_preprocessors:
+            self.scaler, self.encoder = self._fit_preprocessors()
+        else:
+            self.scaler = scaler
+            self.encoder = encoder
 
         # Add debug information
         print(f"\n{'=' * 50}")
         print(f"Dataset: {'Train' if is_train else 'Test'}")
         print(f"Valid cases: {len(self.valid_case_ids)}")
-        print(f"Class distribution: {np.bincount(self.labels) if len(self.labels) > 0 else 'N/A'}")
+        if len(self.labels) > 0:
+            print(f"Class distribution: {np.bincount(self.labels)}")
 
     def _load_clinical_data(self, path):
         if not path or not os.path.exists(path):
@@ -205,6 +211,9 @@ class CTDataset(Dataset):
             encoder.fit(categorical_data)
 
         return scaler, encoder
+
+    def get_preprocessors(self):
+        return self.scaler, self.encoder
 
     def __len__(self):
         return len(self.valid_case_ids)
@@ -561,7 +570,7 @@ class GradCAM:
 
 
 # 6. Training and Evaluation
-def train_model(train_loader, val_loader, clin_feat_dim):
+def train_model(train_loader, val_loader, clin_feat_dim, fold_num):
     # Calculate class weights
     all_labels = []
     for batch in train_loader:
@@ -677,8 +686,9 @@ def train_model(train_loader, val_loader, clin_feat_dim):
                 best_auc = val_auc
             if total_loss < best_loss:
                 best_loss = total_loss
-            torch.save(model.state_dict(), Config.model_save_path)
-            print(f"Saved best model with AUC: {best_auc:.4f}, Loss: {best_loss:.4f}")
+            fold_model_path = f"surgical_difficulty_classifier_fold_{fold_num}.pth"
+            torch.save(model.state_dict(), fold_model_path)
+            print(f"Saved best model for fold {fold_num} with AUC: {best_auc:.4f}, Loss: {best_loss:.4f}")
             patience_counter = 0
         else:
             patience_counter += 1
@@ -694,7 +704,7 @@ def train_model(train_loader, val_loader, clin_feat_dim):
               f"Val Loss: {val_loss:.4f}, Val AUC: {val_auc:.4f}")
 
     # Plot training curves
-    plot_training_curves(train_history, val_history)
+    plot_training_curves(train_history, val_history, fold_num)
 
     return model
 
@@ -725,16 +735,26 @@ def validate_model(model, loader, criterion, threshold=0.5):
             all_preds.extend(preds)
 
     # Calculate metrics
-    auc_score = roc_auc_score(all_labels, all_probs)
+    if len(np.unique(all_labels)) < 2:
+        auc_score = 0.5
+        print("Warning: Only one class present in validation set, setting AUC to 0.5")
+    else:
+        auc_score = roc_auc_score(all_labels, all_probs)
+    
     avg_loss = total_loss / len(loader)
 
     # Add more evaluation metrics
-    precision, recall, _ = precision_recall_curve(all_labels, all_probs)
-    pr_auc = auc(recall, precision)
-    f1 = f1_score(all_labels, all_preds)
-    cm = confusion_matrix(all_labels, all_preds)
-
-    report = classification_report(all_labels, all_preds)
+    if len(np.unique(all_labels)) < 2:
+        pr_auc = 0.5
+        f1 = 0.0
+        cm = np.zeros((2, 2))
+        report = "Cannot generate classification report with only one class"
+    else:
+        precision, recall, _ = precision_recall_curve(all_labels, all_probs)
+        pr_auc = auc(recall, precision)
+        f1 = f1_score(all_labels, all_preds)
+        cm = confusion_matrix(all_labels, all_preds)
+        report = classification_report(all_labels, all_preds)
 
     print(f"ROC AUC: {auc_score:.4f}, PR AUC: {pr_auc:.4f}, F1: {f1:.4f}")
     print(f"Confusion Matrix:\n{cm}")
@@ -744,14 +764,14 @@ def validate_model(model, loader, criterion, threshold=0.5):
 
 
 # Add training curve visualization function
-def plot_training_curves(train_history, val_history):
+def plot_training_curves(train_history, val_history, fold_num):
     plt.figure(figsize=(12, 5))
 
     # Loss curve
     plt.subplot(1, 2, 1)
     plt.plot(train_history['loss'], label='Train Loss')
     plt.plot(val_history['loss'], label='Validation Loss')
-    plt.title('Training and Validation Loss')
+    plt.title(f'Training and Validation Loss - Fold {fold_num}')
     plt.xlabel('Epochs')
     plt.ylabel('Loss')
     plt.legend()
@@ -760,15 +780,15 @@ def plot_training_curves(train_history, val_history):
     plt.subplot(1, 2, 2)
     plt.plot(train_history['auc'], label='Train AUC')
     plt.plot(val_history['auc'], label='Validation AUC')
-    plt.title('Training and Validation AUC')
+    plt.title(f'Training and Validation AUC - Fold {fold_num}')
     plt.xlabel('Epochs')
     plt.ylabel('AUC')
     plt.legend()
 
     plt.tight_layout()
-    plt.savefig(os.path.join(Config.viz_save_dir, 'training_curves.png'))
+    plt.savefig(os.path.join(Config.viz_save_dir, f'training_curves_fold_{fold_num}.png'))
     plt.close()
-    print("Saved training curves to visualizations directory")
+    print(f"Saved training curves for fold {fold_num} to visualizations directory")
 
 
 # 7. Visualization Functions
@@ -1004,18 +1024,14 @@ def apply_oversampling(dataset, indices):
 def main():
     set_seed(36)
 
-    train_transforms, val_transforms = get_transforms()
-
-    # Load full training dataset
-    full_train_dataset = CTDataset(
-        Config.train_image_dir,
-        Config.train_seg_dir,
-        Config.train_clinical_csv,
-        transform=train_transforms,
-        is_train=True
-    )
-
-    # Load test dataset
+    # First, load test dataset completely separately
+    print("\n" + "="*60)
+    print("LOADING TEST DATASET")
+    print("="*60)
+    
+    # Load test dataset with validation transforms (no augmentation)
+    _, val_transforms = get_transforms()
+    
     test_dataset = CTDataset(
         Config.test_image_dir,
         Config.test_seg_dir,
@@ -1023,70 +1039,108 @@ def main():
         transform=val_transforms,
         is_train=False
     )
+    
+    print(f"Test dataset size: {len(test_dataset)}")
+    
+    # Now load training dataset
+    print("\n" + "="*60)
+    print("LOADING TRAINING DATASET")
+    print("="*60)
+    
+    train_transforms, val_transforms = get_transforms()
+    
+    # Load full training dataset
+    full_train_dataset = CTDataset(
+        Config.train_image_dir,
+        Config.train_seg_dir,
+        Config.train_clinical_csv,
+        transform=None,  # No transforms yet, will apply per fold
+        is_train=True
+    )
 
     print(f"Full training dataset size: {len(full_train_dataset)}")
-    print(f"Test dataset size: {len(test_dataset)}")
 
-    # Get clinical feature dimension
+    # Get clinical feature dimension from a sample
     sample = full_train_dataset[0]
     clin_feat_dim = len(sample['clinical'])
     print(f"Clinical feature dimension: {clin_feat_dim}")
 
-    # Use stratified sampling to ensure each fold has samples from both classes
+    # Get labels for stratified k-fold
     labels = [full_train_dataset[i]['label'] for i in range(len(full_train_dataset))]
-    print(f"All labels: {np.bincount(labels)}")
+    print(f"Training set class distribution: {np.bincount(labels)}")
 
-    # Separate positive and negative sample indices
-    positive_indices = [i for i, label in enumerate(labels) if label == 1]
-    negative_indices = [i for i, label in enumerate(labels) if label == 0]
-
-    print(f"Positive samples: {len(positive_indices)}, Negative samples: {len(negative_indices)}")
-
-    # Manually create 5-fold cross-validation, ensuring each fold has positive and negative samples
+    # Use StratifiedKFold for proper 5-fold cross-validation
     n_folds = 5
-    fold_size_pos = len(positive_indices) // n_folds
-    fold_size_neg = len(negative_indices) // n_folds
-
-    # Shuffle indices
-    np.random.shuffle(positive_indices)
-    np.random.shuffle(negative_indices)
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=36)
 
     all_fold_results = []
+    fold_models = []
 
-    for fold in range(n_folds):
-        print(f"\n{'=' * 40}")
-        print(f"Fold {fold + 1}/{n_folds}")
-        print(f"{'=' * 40}")
+    for fold, (train_idx, val_idx) in enumerate(skf.split(range(len(full_train_dataset)), labels)):
+        print(f"\n{'=' * 60}")
+        print(f"FOLD {fold + 1}/{n_folds}")
+        print(f"{'=' * 60}")
 
-        # Select validation set for current fold
-        val_start_pos = fold * fold_size_pos
-        val_end_pos = (fold + 1) * fold_size_pos if fold < n_folds - 1 else len(positive_indices)
-        val_pos_indices = positive_indices[val_start_pos:val_end_pos]
+        # Create training and validation subsets
+        train_subset = torch.utils.data.Subset(full_train_dataset, train_idx)
+        val_subset = torch.utils.data.Subset(full_train_dataset, val_idx)
 
-        val_start_neg = fold * fold_size_neg
-        val_end_neg = (fold + 1) * fold_size_neg if fold < n_folds - 1 else len(negative_indices)
-        val_neg_indices = negative_indices[val_start_neg:val_end_neg]
-
-        val_indices = val_pos_indices + val_neg_indices
-
-        # Training set is all samples except validation set
-        train_pos_indices = [i for i in positive_indices if i not in val_pos_indices]
-        train_neg_indices = [i for i in negative_indices if i not in val_neg_indices]
-        train_indices = train_pos_indices + train_neg_indices
-
-        # Check class distribution
-        train_labels = [labels[i] for i in train_indices]
-        val_labels = [labels[i] for i in val_indices]
+        # Extract labels for these subsets
+        train_labels = [labels[i] for i in train_idx]
+        val_labels = [labels[i] for i in val_idx]
+        
         print(f"Train class distribution: {np.bincount(train_labels)}")
         print(f"Validation class distribution: {np.bincount(val_labels)}")
+        print(f"Train samples: {len(train_idx)}, Validation samples: {len(val_idx)}")
 
-        # Apply oversampling technique
+        # Apply oversampling to training indices
         print("Applying SMOTE oversampling...")
-        resampled_train_idx = apply_oversampling(full_train_dataset, train_indices)
+        resampled_train_idx = apply_oversampling(full_train_dataset, train_idx)
+
+        # Create datasets with proper transforms and preprocessors
+        # First, create a training dataset with transforms to fit preprocessors
+        train_dataset_for_fit = CTDataset(
+            Config.train_image_dir,
+            Config.train_seg_dir,
+            Config.train_clinical_csv,
+            transform=None,
+            is_train=True,
+            fit_preprocessors=True
+        )
+        
+        # Get preprocessors from this dataset
+        scaler, encoder = train_dataset_for_fit.get_preprocessors()
+        
+        # Now create actual training and validation datasets with these preprocessors
+        train_dataset = CTDataset(
+            Config.train_image_dir,
+            Config.train_seg_dir,
+            Config.train_clinical_csv,
+            transform=train_transforms,
+            is_train=True,
+            scaler=scaler,
+            encoder=encoder,
+            fit_preprocessors=False
+        )
+        
+        val_dataset = CTDataset(
+            Config.train_image_dir,
+            Config.train_seg_dir,
+            Config.train_clinical_csv,
+            transform=val_transforms,
+            is_train=False,
+            scaler=scaler,
+            encoder=encoder,
+            fit_preprocessors=False
+        )
+        
+        # Create subsets with indices
+        train_subset_final = torch.utils.data.Subset(train_dataset, resampled_train_idx)
+        val_subset_final = torch.utils.data.Subset(val_dataset, val_idx)
 
         # Create data loaders
         train_loader = DataLoader(
-            torch.utils.data.Subset(full_train_dataset, resampled_train_idx),
+            train_subset_final,
             batch_size=Config.batch_size,
             shuffle=True,
             num_workers=Config.num_workers,
@@ -1094,59 +1148,56 @@ def main():
         )
 
         val_loader = DataLoader(
-            torch.utils.data.Subset(full_train_dataset, val_indices),
+            val_subset_final,
             batch_size=Config.batch_size,
             shuffle=False,
             num_workers=Config.num_workers
         )
 
-        # Train model
-        print("Starting model training...")
-        model = train_model(train_loader, val_loader, clin_feat_dim)
+        # Train model for this fold
+        print(f"\nTraining model for fold {fold + 1}...")
+        model = train_model(train_loader, val_loader, clin_feat_dim, fold + 1)
 
-        # Load best model
-        model.load_state_dict(torch.load(Config.model_save_path, map_location=Config.device))
-        print(f"Loaded best model from {Config.model_save_path}")
+        # Load best model for this fold
+        fold_model_path = f"surgical_difficulty_classifier_fold_{fold + 1}.pth"
+        model.load_state_dict(torch.load(fold_model_path, map_location=Config.device))
+        print(f"Loaded best model for fold {fold + 1} from {fold_model_path}")
 
         # Evaluate on validation set
-        print("Evaluating on validation set...")
+        print(f"\nEvaluating fold {fold + 1} on validation set...")
         criterion = FocalLoss(alpha=0.75, gamma=2.0)
         val_results = validate_model(model, val_loader, criterion, threshold=0.5)
         val_auc, val_loss = val_results[0], val_results[1]
         print(f"Fold {fold + 1} Validation AUC: {val_auc:.4f}")
 
-        # Evaluate on test set
-        test_loader = DataLoader(
-            test_dataset,
-            batch_size=Config.batch_size,
-            shuffle=False,
-            num_workers=Config.num_workers
-        )
-
-        print("Evaluating on test set...")
-        test_results = validate_model(model, test_loader, criterion, threshold=0.487)
-        test_auc, test_loss = test_results[0], test_results[1]
-        print(f"Fold {fold + 1} Test AUC: {test_auc:.4f}")
-
-        # Save results
+        # Save model and results for this fold
         all_fold_results.append({
             'fold': fold + 1,
             'val_auc': val_auc,
-            'test_auc': test_auc,
-            'model': model
+            'val_loss': val_loss,
+            'model': model,
+            'scaler': scaler,
+            'encoder': encoder
         })
+        
+        fold_models.append(model)
 
-    # Calculate average results
+    # Calculate average validation results
     avg_val_auc = np.mean([res['val_auc'] for res in all_fold_results])
-    avg_test_auc = np.mean([res['test_auc'] for res in all_fold_results])
-
-    print(f"\n{'=' * 50}")
+    print(f"\n{'=' * 60}")
+    print(f"5-FOLD CROSS-VALIDATION RESULTS")
+    print(f"{'=' * 60}")
     print(f"Average Validation AUC: {avg_val_auc:.4f}")
-    print(f"Average Test AUC: {avg_test_auc:.4f}")
-    print(f"{'=' * 50}")
+    
+    for res in all_fold_results:
+        print(f"Fold {res['fold']}: Validation AUC = {res['val_auc']:.4f}")
 
-    # Use all models for ensemble prediction
-    print("Performing ensemble prediction on test set...")
+    # FINAL EVALUATION ON HELD-OUT TEST SET
+    print(f"\n{'=' * 60}")
+    print("FINAL EVALUATION ON HELD-OUT TEST SET")
+    print(f"{'=' * 60}")
+    
+    # Create test loader
     test_loader = DataLoader(
         test_dataset,
         batch_size=Config.batch_size,
@@ -1154,25 +1205,28 @@ def main():
         num_workers=Config.num_workers
     )
 
+    # Perform ensemble prediction using all fold models
+    print("Performing ensemble prediction on test set...")
     ensemble_probs = []
+    
     with torch.no_grad():
-        for batch in test_loader:
+        for batch in tqdm(test_loader, desc="Ensemble Prediction"):
             ct = batch['ct'].to(Config.device).float()
             seg = batch['seg'].to(Config.device).float()
             clinical = batch['clinical'].to(Config.device).float()
 
             fold_probs = []
-            for res in all_fold_results:
-                model = res['model']
+            for model in fold_models:
+                model.eval()
                 logits = model(ct, seg, clinical)
                 probs = torch.sigmoid(logits).cpu().numpy()
                 fold_probs.append(probs)
 
-            # Average probabilities
+            # Average probabilities across all folds
             avg_probs = np.mean(fold_probs, axis=0)
             ensemble_probs.extend(avg_probs)
 
-    # Calculate ensemble metrics
+    # Calculate ensemble metrics on test set
     test_labels = [test_dataset[i]['label'] for i in range(len(test_dataset))]
     test_case_ids = [test_dataset[i]['case_id'] for i in range(len(test_dataset))]
 
@@ -1189,37 +1243,39 @@ def main():
     else:
         ensemble_report = classification_report(test_labels, ensemble_preds)
 
-    print(f"\n{'=' * 50}")
-    print(f"Ensemble Test AUC: {ensemble_auc:.4f}")
+    print(f"\n{'=' * 60}")
+    print("ENSEMBLE TEST SET PERFORMANCE")
+    print(f"{'=' * 60}")
+    print(f"Test AUC: {ensemble_auc:.4f}")
     print(ensemble_report)
-    print(f"{'=' * 50}")
 
-    # Save results
+    # Save test set predictions
     results_df = pd.DataFrame({
         'case_id': test_case_ids,
         'true_label': test_labels,
         'pred_prob': ensemble_probs,
         'pred_label': ensemble_preds
     })
-    results_df.to_csv(os.path.join(Config.viz_save_dir, "ensemble_predictions.csv"), index=False)
+    results_df.to_csv(os.path.join(Config.viz_save_dir, "test_set_predictions.csv"), index=False)
+    print(f"\nSaved test set predictions to {Config.viz_save_dir}/test_set_predictions.csv")
 
-    # Generate visualization charts
-    print("Generating performance visualizations...")
+    # Generate visualization charts for test set performance
+    print("\nGenerating performance visualizations for test set...")
 
     # ROC curve
-    plot_roc_curve(test_labels, ensemble_probs, os.path.join(Config.viz_save_dir, "roc_curve.png"))
+    plot_roc_curve(test_labels, ensemble_probs, os.path.join(Config.viz_save_dir, "test_roc_curve.png"))
 
     # PR curve
-    plot_pr_curve(test_labels, ensemble_probs, os.path.join(Config.viz_save_dir, "pr_curve.png"))
+    plot_pr_curve(test_labels, ensemble_probs, os.path.join(Config.viz_save_dir, "test_pr_curve.png"))
 
     # Confusion matrix
-    plot_confusion_matrix(test_labels, ensemble_preds, os.path.join(Config.viz_save_dir, "confusion_matrix.png"))
+    plot_confusion_matrix(test_labels, ensemble_preds, os.path.join(Config.viz_save_dir, "test_confusion_matrix.png"))
 
     # Waterfall plot
-    plot_waterfall(test_labels, ensemble_probs, test_case_ids, os.path.join(Config.viz_save_dir, "waterfall_plot.png"))
+    plot_waterfall(test_labels, ensemble_probs, test_case_ids, os.path.join(Config.viz_save_dir, "test_waterfall_plot.png"))
 
-    # Analyze failure cases
-    print("Analyzing failure cases...")
+    # Analyze failure cases on test set
+    print("\nAnalyzing failure cases on test set...")
     failure_cases = []
     for i in range(len(test_labels)):
         if ensemble_preds[i] != test_labels[i]:
@@ -1231,16 +1287,37 @@ def main():
             })
 
     if failure_cases:
-        print(f"Found {len(failure_cases)} failure cases")
+        print(f"Found {len(failure_cases)} failure cases on test set")
         failure_df = pd.DataFrame(failure_cases)
-        failure_df.to_csv(os.path.join(Config.viz_save_dir, "failure_analysis.csv"), index=False)
+        failure_df.to_csv(os.path.join(Config.viz_save_dir, "test_failure_analysis.csv"), index=False)
     else:
-        print("No failure cases found!")
+        print("No failure cases found on test set!")
 
-    # Visualize Grad-CAM (using first model)
-    print("Generating Grad-CAM visualizations...")
-    visualize_grad_cam(all_fold_results[0]['model'], test_loader, num_samples=5)
+    # Visualize Grad-CAM on test set samples (using first fold model)
+    print("\nGenerating Grad-CAM visualizations for test set samples...")
+    visualize_grad_cam(fold_models[0], test_loader, num_samples=5)
 
+    # Save cross-validation results summary
+    cv_results_df = pd.DataFrame({
+        'fold': [res['fold'] for res in all_fold_results],
+        'val_auc': [res['val_auc'] for res in all_fold_results],
+        'val_loss': [res['val_loss'] for res in all_fold_results]
+    })
+    
+    cv_results_df.loc['mean'] = ['Average', avg_val_auc, np.mean([res['val_loss'] for res in all_fold_results])]
+    cv_results_df.loc['std'] = ['Std', np.std([res['val_auc'] for res in all_fold_results]), 
+                               np.std([res['val_loss'] for res in all_fold_results])]
+    
+    cv_results_df.to_csv(os.path.join(Config.viz_save_dir, "cross_validation_results.csv"), index=False)
+    
+    print(f"\n{'=' * 60}")
+    print("CROSS-VALIDATION SUMMARY")
+    print(f"{'=' * 60}")
+    print(cv_results_df.to_string())
+    
+    print(f"\nFinal Test AUC: {ensemble_auc:.4f}")
+    print(f"Average Validation AUC: {avg_val_auc:.4f}")
+    
     print("\nAll operations completed successfully!")
 
 
