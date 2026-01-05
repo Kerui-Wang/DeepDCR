@@ -7,7 +7,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 import matplotlib.pyplot as plt
 import SimpleITK as sitk
 from tqdm import tqdm
@@ -15,7 +15,7 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.model_selection import train_test_split, KFold, StratifiedKFold
 from sklearn.metrics import classification_report, roc_auc_score, confusion_matrix, precision_recall_curve, auc, \
     f1_score, roc_curve
-from imblearn.over_sampling import SMOTE
+# NOTE: SMOTE is intentionally not used for index-based oversampling.
 import monai
 from monai.transforms import (
     Compose, EnsureChannelFirstd, ScaleIntensityRanged,
@@ -103,8 +103,9 @@ class FocalLoss(nn.Module):
 
 # 3. Data Loader
 class CTDataset(Dataset):
-    def __init__(self, image_dir, seg_dir, clinical_csv, transform=None, is_train=True, 
-                 scaler=None, encoder=None, fit_preprocessors=True):
+    def __init__(self, image_dir, seg_dir, clinical_csv, transform=None, is_train=True,
+                 scaler=None, encoder=None, fit_preprocessors=True,
+                 include_case_ids=None):
         self.image_dir = image_dir
         self.seg_dir = seg_dir
         self.clinical_csv = clinical_csv
@@ -112,7 +113,8 @@ class CTDataset(Dataset):
         self.is_train = is_train
 
         # Case list
-        seg_files = [f for f in os.listdir(seg_dir) if f.endswith('.nii.gz')]
+        # IMPORTANT: sort to guarantee consistent case ordering across folds/datasets
+        seg_files = sorted([f for f in os.listdir(seg_dir) if f.endswith('.nii.gz')])
         self.case_ids = [f.split('.')[0] for f in seg_files]
 
         # Clinical data
@@ -120,6 +122,11 @@ class CTDataset(Dataset):
 
         # Ensure valid_case_ids only contains cases present in clinical data
         self.valid_case_ids = [cid for cid in self.case_ids if cid in self.clinical_data]
+
+        # Optionally restrict to a subset of case_ids (used to fit preprocessors per-fold)
+        if include_case_ids is not None:
+            include_set = set(include_case_ids)
+            self.valid_case_ids = [cid for cid in self.valid_case_ids if cid in include_set]
 
         # Ensure labels correspond to valid cases
         self.labels = [self.clinical_data[cid].get('difficulty', 0) for cid in self.valid_case_ids]
@@ -669,8 +676,12 @@ def train_model(train_loader, val_loader, clin_feat_dim, fold_num):
                 all_train_probs.extend(probs)
                 all_train_labels.extend(batch['label'].cpu().numpy())
 
-        # Calculate training AUC
-        train_auc = roc_auc_score(all_train_labels, all_train_probs)
+        # Calculate training AUC (guard against single-class edge cases)
+        if len(np.unique(all_train_labels)) < 2:
+            train_auc = 0.5
+            print("Warning: Only one class present in training epoch labels; setting Train AUC to 0.5")
+        else:
+            train_auc = roc_auc_score(all_train_labels, all_train_probs)
         train_history['loss'].append(total_loss / len(train_loader))
         train_history['auc'].append(train_auc)
 
@@ -680,12 +691,17 @@ def train_model(train_loader, val_loader, clin_feat_dim, fold_num):
         val_history['loss'].append(val_loss)
         val_history['auc'].append(val_auc)
 
-        # Early stopping decision
-        if val_auc > best_auc or total_loss < best_loss:
-            if val_auc > best_auc:
-                best_auc = val_auc
-            if total_loss < best_loss:
-                best_loss = total_loss
+        # Early stopping decision (use validation metrics only)
+        # Prefer AUC; if AUC ties or is unavailable, fall back to validation loss.
+        improved = False
+        if val_auc > best_auc:
+            best_auc = val_auc
+            improved = True
+        elif val_auc == best_auc and val_loss < best_loss:
+            improved = True
+
+        if improved:
+            best_loss = min(best_loss, val_loss)
             fold_model_path = f"surgical_difficulty_classifier_fold_{fold_num}.pth"
             torch.save(model.state_dict(), fold_model_path)
             print(f"Saved best model for fold {fold_num} with AUC: {best_auc:.4f}, Loss: {best_loss:.4f}")
@@ -763,6 +779,28 @@ def validate_model(model, loader, criterion, threshold=0.5):
     return auc_score, avg_loss, report, all_probs, all_labels
 
 
+def find_best_threshold_f1(probs, labels):
+    """Select a decision threshold on validation data by maximizing F1.
+
+    Returns 0.5 if threshold tuning is not possible (e.g., single-class labels).
+    """
+    y = np.asarray(labels).astype(int)
+    p = np.asarray(probs, dtype=np.float32)
+    if len(np.unique(y)) < 2:
+        return 0.5
+
+    best_thr = 0.5
+    best_f1 = -1.0
+    # Coarse but robust grid; you can tighten if needed.
+    for thr in np.linspace(0.05, 0.95, 91):
+        pred = (p >= thr).astype(int)
+        f1 = f1_score(y, pred, zero_division=0)
+        if f1 > best_f1:
+            best_f1 = f1
+            best_thr = float(thr)
+    return best_thr
+
+
 # Add training curve visualization function
 def plot_training_curves(train_history, val_history, fold_num):
     plt.figure(figsize=(12, 5))
@@ -838,7 +876,7 @@ def plot_confusion_matrix(y_true, y_pred, save_path):
     print(f"Saved confusion matrix to {save_path}")
 
 
-def plot_waterfall(y_true, y_probs, case_ids, save_path):
+def plot_waterfall(y_true, y_probs, case_ids, save_path, threshold=0.5):
     # Sort by prediction probability
     sorted_indices = np.argsort(y_probs)
     sorted_probs = np.array(y_probs)[sorted_indices]
@@ -848,9 +886,9 @@ def plot_waterfall(y_true, y_probs, case_ids, save_path):
     # Create color mapping
     colors = []
     for i in range(len(sorted_probs)):
-        if sorted_labels[i] == 0 and sorted_probs[i] < 0.487:
+        if sorted_labels[i] == 0 and sorted_probs[i] < threshold:
             colors.append('green')  # Correctly predicted easy cases
-        elif sorted_labels[i] == 1 and sorted_probs[i] >= 0.487:
+        elif sorted_labels[i] == 1 and sorted_probs[i] >= threshold:
             colors.append('blue')  # Correctly predicted hard cases
         else:
             colors.append('red')  # Incorrectly predicted cases
@@ -860,7 +898,7 @@ def plot_waterfall(y_true, y_probs, case_ids, save_path):
     bars = plt.bar(range(len(sorted_probs)), sorted_probs, color=colors)
 
     # Add baseline
-    plt.axhline(y=0.487, color='gray', linestyle='--', alpha=0.7)
+    plt.axhline(y=threshold, color='gray', linestyle='--', alpha=0.7)
 
     # Set labels and title
     plt.xlabel('Patient Index (Sorted by Prediction Probability)')
@@ -884,7 +922,7 @@ def plot_waterfall(y_true, y_probs, case_ids, save_path):
 
 
 # 8. Grad-CAM Visualization
-def visualize_grad_cam(model, loader, num_samples=3):
+def visualize_grad_cam(model, loader, num_samples=3, threshold=0.5):
     model.eval()
 
     # Get target layer
@@ -914,7 +952,7 @@ def visualize_grad_cam(model, loader, num_samples=3):
 
         # Get prediction probability
         prob = torch.sigmoid(output).item()
-        pred_label = 1 if prob > 0.487 else 0
+        pred_label = 1 if prob > threshold else 0
         true_label = sample['label'][0].item()
 
         # Generate CAM
@@ -991,57 +1029,43 @@ def get_transforms():
     return train_transforms, val_transforms
 
 
-# 10. Oversampling Function
-def apply_oversampling(dataset, indices):
-    """Apply SMOTE oversampling technique"""
-    # Get original labels
-    labels = [dataset[i]['label'] for i in indices]
+# 10. Class balancing (recommended for image datasets)
+def make_weighted_sampler(train_labels, seed=36):
+    """Create a per-sample WeightedRandomSampler to balance binary classes.
 
-    # Check class distribution
-    class_counts = np.bincount(labels)
-    print(f"Original class distribution: {class_counts}")
+    This avoids SMOTE (which is not meaningful for index-based sampling and can
+    produce invalid fractional indices).
+    """
+    y = np.asarray(train_labels).astype(int)
+    counts = np.bincount(y, minlength=2)
+    print(f"Train class counts (before sampling): {counts}")
 
-    # Apply SMOTE oversampling
-    smote = SMOTE(random_state=42)
-    # Create feature matrix (using indices as features since we only need to balance indices)
-    X = np.array(indices).reshape(-1, 1)
-    y = np.array(labels)
+    # If a class is missing, fall back to uniform sampling to avoid divide-by-zero.
+    if np.any(counts == 0):
+        weights = np.ones_like(y, dtype=np.float32)
+        print("Warning: one class missing in this fold's train split; using uniform sampler.")
+    else:
+        class_weights = 1.0 / counts
+        weights = class_weights[y].astype(np.float32)
 
-    # Apply SMOTE
-    X_resampled, y_resampled = smote.fit_resample(X, y)
-
-    # Get oversampled indices
-    resampled_indices = X_resampled.flatten().tolist()
-
-    # Check class distribution after oversampling
-    resampled_class_counts = np.bincount(y_resampled)
-    print(f"Resampled class distribution: {resampled_class_counts}")
-
-    return resampled_indices
+    g = torch.Generator()
+    g.manual_seed(seed)
+    return WeightedRandomSampler(
+        weights=torch.as_tensor(weights, dtype=torch.double),
+        num_samples=len(weights),
+        replacement=True,
+        generator=g,
+    )
 
 
 # 11. Main Pipeline
 def main():
     set_seed(36)
 
-    # First, load test dataset completely separately
-    print("\n" + "="*60)
-    print("LOADING TEST DATASET")
-    print("="*60)
-    
-    # Load test dataset with validation transforms (no augmentation)
-    _, val_transforms = get_transforms()
-    
-    test_dataset = CTDataset(
-        Config.test_image_dir,
-        Config.test_seg_dir,
-        Config.test_clinical_csv,
-        transform=val_transforms,
-        is_train=False
-    )
-    
-    print(f"Test dataset size: {len(test_dataset)}")
-    
+    # NOTE: We intentionally defer loading the test dataset until after we have
+    # fold-specific clinical preprocessors (scaler/encoder), to avoid any
+    # test-set fitting/leakage.
+
     # Now load training dataset
     print("\n" + "="*60)
     print("LOADING TRAINING DATASET")
@@ -1093,19 +1117,17 @@ def main():
         print(f"Validation class distribution: {np.bincount(val_labels)}")
         print(f"Train samples: {len(train_idx)}, Validation samples: {len(val_idx)}")
 
-        # Apply oversampling to training indices
-        print("Applying SMOTE oversampling...")
-        resampled_train_idx = apply_oversampling(full_train_dataset, train_idx)
-
-        # Create datasets with proper transforms and preprocessors
-        # First, create a training dataset with transforms to fit preprocessors
+        # --- Fold-specific clinical preprocessors (NO leakage) ---
+        # Fit scaler/encoder ONLY on the current fold's training cases.
+        train_case_ids = [full_train_dataset.valid_case_ids[i] for i in train_idx]
         train_dataset_for_fit = CTDataset(
             Config.train_image_dir,
             Config.train_seg_dir,
             Config.train_clinical_csv,
             transform=None,
             is_train=True,
-            fit_preprocessors=True
+            fit_preprocessors=True,
+            include_case_ids=train_case_ids,
         )
         
         # Get preprocessors from this dataset
@@ -1134,15 +1156,19 @@ def main():
             fit_preprocessors=False
         )
         
-        # Create subsets with indices
-        train_subset_final = torch.utils.data.Subset(train_dataset, resampled_train_idx)
+        # Create subsets with indices (same ordering guaranteed by sorted seg_files)
+        train_subset_final = torch.utils.data.Subset(train_dataset, train_idx)
         val_subset_final = torch.utils.data.Subset(val_dataset, val_idx)
+
+        # --- Class balancing sampler (recommended) ---
+        sampler = make_weighted_sampler(train_labels, seed=36 + fold)
 
         # Create data loaders
         train_loader = DataLoader(
             train_subset_final,
             batch_size=Config.batch_size,
-            shuffle=True,
+            shuffle=False,
+            sampler=sampler,
             num_workers=Config.num_workers,
             drop_last=True
         )
@@ -1168,6 +1194,9 @@ def main():
         criterion = FocalLoss(alpha=0.75, gamma=2.0)
         val_results = validate_model(model, val_loader, criterion, threshold=0.5)
         val_auc, val_loss = val_results[0], val_results[1]
+        val_probs, val_labels_for_thr = val_results[3], val_results[4]
+        best_thr = find_best_threshold_f1(val_probs, val_labels_for_thr)
+        print(f"Fold {fold + 1} best F1 threshold (on val): {best_thr:.3f}")
         print(f"Fold {fold + 1} Validation AUC: {val_auc:.4f}")
 
         # Save model and results for this fold
@@ -1178,6 +1207,7 @@ def main():
             'model': model,
             'scaler': scaler,
             'encoder': encoder
+            , 'best_threshold': best_thr
         })
         
         fold_models.append(model)
@@ -1197,34 +1227,72 @@ def main():
     print("FINAL EVALUATION ON HELD-OUT TEST SET")
     print(f"{'=' * 60}")
     
-    # Create test loader
+    # --- Fix threshold: choose on validation, then freeze for test ---
+    fold_thresholds = [res.get('best_threshold', 0.5) for res in all_fold_results]
+    fixed_threshold = float(np.median(fold_thresholds))
+    print(f"Fixed decision threshold for test (median of fold-val thresholds): {fixed_threshold:.3f}")
+
+    # --- Load test dataset WITHOUT fitting anything on the test set ---
+    # We create one "base" dataset to get labels/case_ids (preprocessors do not affect these).
+    _, val_transforms = get_transforms()
+    test_dataset = CTDataset(
+        Config.test_image_dir,
+        Config.test_seg_dir,
+        Config.test_clinical_csv,
+        transform=val_transforms,
+        is_train=False,
+        scaler=all_fold_results[0]['scaler'],
+        encoder=all_fold_results[0]['encoder'],
+        fit_preprocessors=False,
+    )
+    print(f"Test dataset size: {len(test_dataset)}")
+
+    # A base loader (used for metrics/visualizations that don't require fold-specific preprocessing)
     test_loader = DataLoader(
         test_dataset,
         batch_size=Config.batch_size,
         shuffle=False,
-        num_workers=Config.num_workers
+        num_workers=Config.num_workers,
     )
 
-    # Perform ensemble prediction using all fold models
-    print("Performing ensemble prediction on test set...")
-    ensemble_probs = []
-    
-    with torch.no_grad():
-        for batch in tqdm(test_loader, desc="Ensemble Prediction"):
-            ct = batch['ct'].to(Config.device).float()
-            seg = batch['seg'].to(Config.device).float()
-            clinical = batch['clinical'].to(Config.device).float()
+    # --- Ensemble prediction with fold-specific preprocessors (scaler/encoder) ---
+    print("Performing ensemble prediction on test set (fold-specific preprocessing)...")
+    all_fold_test_probs = []
+    for res in all_fold_results:
+        fold_id = res['fold']
+        model = res['model']
+        model.eval()
 
-            fold_probs = []
-            for model in fold_models:
-                model.eval()
+        test_dataset_fold = CTDataset(
+            Config.test_image_dir,
+            Config.test_seg_dir,
+            Config.test_clinical_csv,
+            transform=val_transforms,
+            is_train=False,
+            scaler=res['scaler'],
+            encoder=res['encoder'],
+            fit_preprocessors=False,
+        )
+        test_loader_fold = DataLoader(
+            test_dataset_fold,
+            batch_size=Config.batch_size,
+            shuffle=False,
+            num_workers=Config.num_workers,
+        )
+
+        fold_probs = []
+        with torch.no_grad():
+            for batch in tqdm(test_loader_fold, desc=f"Fold {fold_id} Test Prediction"):
+                ct = batch['ct'].to(Config.device).float()
+                seg = batch['seg'].to(Config.device).float()
+                clinical = batch['clinical'].to(Config.device).float()
                 logits = model(ct, seg, clinical)
                 probs = torch.sigmoid(logits).cpu().numpy()
-                fold_probs.append(probs)
+                fold_probs.extend(probs)
 
-            # Average probabilities across all folds
-            avg_probs = np.mean(fold_probs, axis=0)
-            ensemble_probs.extend(avg_probs)
+        all_fold_test_probs.append(np.asarray(fold_probs, dtype=np.float32))
+
+    ensemble_probs = np.mean(np.stack(all_fold_test_probs, axis=0), axis=0).tolist()
 
     # Calculate ensemble metrics on test set
     test_labels = [test_dataset[i]['label'] for i in range(len(test_dataset))]
@@ -1236,7 +1304,7 @@ def main():
     else:
         ensemble_auc = roc_auc_score(test_labels, ensemble_probs)
 
-    ensemble_preds = (np.array(ensemble_probs) > 0.487).astype(int)
+    ensemble_preds = (np.array(ensemble_probs) > fixed_threshold).astype(int)
 
     if len(np.unique(test_labels)) < 2:
         ensemble_report = "Cannot generate classification report with only one class"
@@ -1272,7 +1340,9 @@ def main():
     plot_confusion_matrix(test_labels, ensemble_preds, os.path.join(Config.viz_save_dir, "test_confusion_matrix.png"))
 
     # Waterfall plot
-    plot_waterfall(test_labels, ensemble_probs, test_case_ids, os.path.join(Config.viz_save_dir, "test_waterfall_plot.png"))
+    plot_waterfall(test_labels, ensemble_probs, test_case_ids,
+                   os.path.join(Config.viz_save_dir, "test_waterfall_plot.png"),
+                   threshold=fixed_threshold)
 
     # Analyze failure cases on test set
     print("\nAnalyzing failure cases on test set...")
@@ -1295,7 +1365,7 @@ def main():
 
     # Visualize Grad-CAM on test set samples (using first fold model)
     print("\nGenerating Grad-CAM visualizations for test set samples...")
-    visualize_grad_cam(fold_models[0], test_loader, num_samples=5)
+    visualize_grad_cam(fold_models[0], test_loader, num_samples=5, threshold=fixed_threshold)
 
     # Save cross-validation results summary
     cv_results_df = pd.DataFrame({
