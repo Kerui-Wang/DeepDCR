@@ -12,10 +12,9 @@
         "The_nasal_cavity_space_in_the_En-DCR_surgical_approach": 3
     },
     "numTraining": 296,
-    "numTest": 30,
-    "validation": [],
     "file_ending": ".nii.gz",
     "channel_names": {
         "0": "CT"
     }
+
 }
