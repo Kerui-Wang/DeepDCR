@@ -1,13 +1,29 @@
-# DeepDCR: Deep Learning for DCR Surgery Difficulty Prediction
-Code for "A CT Dacryocystography-Based Deep Learning Approach for Lacrimal Duct Segmentation and Surgical Difficulty Assessment to Guide Management of Primary acquired Nasolacrimal Duct Obstruction"
+# DeepDCR: Multimodal Deep Learning for En-DCR Surgical Difficulty and Prognosis Stratification
+Code for DeepDCR, a CT-DCG–based multimodal AI framework for:
+   Automated segmentation of surgically relevant anatomy for endoscopic dacryocystorhinostomy (En-DCR)
+   Preoperative prediction of surgical difficulty (Normal vs Difficult)
+   Preoperative prediction of 6-month postoperative outcome (Success vs Failure)
 
-# Introduction
-DeepDCR is a deep learning model designed to predict surgical difficulty in endoscopic dacryocystorhinostomy (En-DCR) based on preoperative CT-DCG imaging and clinical features.
+# Overview
+DeepDCR is a clinically oriented pipeline for primary acquired nasolacrimal duct obstruction (PANDO) based on preoperative CT dacryocystography (CT-DCG). The framework combines:
+   1.Two-stage cascade nnU-Net segmentation (coarse localization + fine segmentation)
+   2.Segmentation-derived handcrafted morphology and thickness features
+   3.Deep learning embeddings extracted from a frozen nnU-Net encoder bottleneck
+   4.Clinical variables
+   5.A probability-calibrated Linear SVM (selected as final classifier in the study)
+The design goal is to provide interpretable, leakage-aware, and surgery-relevant preoperative risk stratification for En-DCR case planning and triage.
 
-# Model Architecture
-DeepDCR employs a dual-path architecture:
-1. Imaging Segmentation Path: 3D CNN based on nnUNet for precise extraction of lacrimal sac and nasal structure features from preoperative CT. We utilized the nnU-Net framework for automatic segmentation of the target regions of interest (ROIs). The nnU-Net is a self-configuring deep learning-based segmentation method that automatically adapts to any given dataset, determining key parameters such as patch size, batch size, and data augmentation strategies (https://github.com/MIC-DKFZ/nnUNet). The network architecture was a 3D full-resolution U-Net (3d_fullres) with six encoding and decoding stages. The model consisted of convolutional layers with kernel sizes of 3×3×3 and instance normalization. The number of feature channels started at 32 in the first stage and doubled after each downsampling step, up to a maximum of 320. The input patch size was set to 56×224×192 voxels based on the dataset characteristics.
-2. Classification Prediction Path: Multimodal network integrating imaging features with clinical features, outputting surgical difficulty classification (Normal=0, Difficult=1)
+# What is included in this code release
+This de-identified code release focuses on the imaging feature engineering and representation learning components, including:
+   Morphological feature extraction from segmentation masks (lacrimal / maxilla / nasal space)
+   Surgery-relevant maxilla thickness visualization and measurement
+   nnU-Net encoder embedding extraction with leakage-safe PCA fitting (fit on internal OOF only)
+   Helper scripts for downstream integration into hybrid tabular models (clinical + morphology + DL features)
+
+# Example scripts (de-identified)
+   dcr_surgery_morph_features_extraction.py
+   extract_nnunet_embeddings.py
+   maxilla_thickness_axial_half_surgery.py
 
 # System Requirements
 1. Hardware Requirements:
@@ -27,9 +43,9 @@ DeepDCR employs a dual-path architecture:
 2. Install Dependencies:
    ```pip install -r requirements.txt```
 4. Download Model Weights:
-   Due to file size limitations, pre-trained model weights are available for download [here (https://huggingface.co/datasets/kerui7/DeepDCR_model_weight)].
-   Model weights are available via Hugging Face Hub: from huggingface_hub import snapshot_download
-                                                    ```snapshot_download(repo_id="kerui7/DeepDCR_model_weight", local_dir="./weights")```
+   Pre-trained model weights are **not publicly available** in this repository.  
+   Upon reasonable request and **with permission from the authors**, model weights may be provided for academic research purposes only.
+   Please contact the corresponding author (or the authors listed in the manuscript) to request access.
 # Data Preparation
 Ensure the following directory structure:
 ```
@@ -44,8 +60,12 @@ data/
 ```
 
 # Performance Evaluation
-Performance metrics on independent test set(30 patients):
-DeepDCR achieved Dice scores of 0.810 (lacrimal sac), 0.834 (maxilla), and 0.825 (nasal cavity). On external testing (n=30), DeepDCR demonstrated an AUC of 0.871 (95% CI: 0.720-0.978) with perfect sensitivity of 100.0% (95% CI: 74.1%-100.0%) and specificity of 73.7% (95% CI: 52.4%-93.3%). 
+DeepDCR was evaluated on two binary tasks:
+   1.Surgical difficulty prediction
+      Difficult vs normal (based on surgeon-specific operative-time percentile threshold)
+   2.6-month outcome prediction
+      Failure vs success (based on follow-up patency/recurrence criteria)
+The manuscript describes a retrospective multi-center study design and external validation strategy in detail.
 
 # Contributing
 We welcome Issues and Pull Requests to improve this project.
@@ -58,3 +78,10 @@ This research adheres to medical research ethics guidelines. All data were anony
 
 # Disclaimer 
 This model is intended to assist clinical decision-making and should not replace professional medical judgment. Users should make final decisions based on clinical experience and individual patient circumstances.
+
+# Citation
+If you use this code or adapt parts of the feature engineering / embedding extraction pipeline, please cite the associated DeepDCR study/manuscript (and the nnU-Net framework) as appropriate.
+
+# Code availability statement
+The de-identified code for feature extraction, embedding extraction, and visualization used in the DeepDCR workflow is publicly available in this repository.
+Pretrained model weights are not publicly released.
