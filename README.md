@@ -1,5 +1,6 @@
 # DeepDCR: Multimodal Deep Learning for En-DCR Surgical Difficulty and Prognosis Stratification
 Code for DeepDCR, a CT-DCG–based multimodal AI framework for:
+
    Automated segmentation of surgically relevant anatomy for endoscopic dacryocystorhinostomy (En-DCR)
    
    Preoperative prediction of surgical difficulty (Normal vs Difficult)
@@ -8,6 +9,7 @@ Code for DeepDCR, a CT-DCG–based multimodal AI framework for:
 
 # Overview
 DeepDCR is a clinically oriented pipeline for primary acquired nasolacrimal duct obstruction (PANDO) based on preoperative CT dacryocystography (CT-DCG). The framework combines:
+
    1.Two-stage cascade nnU-Net segmentation (coarse localization + fine segmentation)
    
    2.Segmentation-derived handcrafted morphology and thickness features
@@ -22,6 +24,7 @@ The design goal is to provide interpretable, leakage-aware, and surgery-relevant
 
 # What is included in this code release
 This de-identified code release focuses on the imaging feature engineering and representation learning components, including:
+
    Morphological feature extraction from segmentation masks (lacrimal / maxilla / nasal space)
    
    Surgery-relevant maxilla thickness visualization and measurement
@@ -31,6 +34,7 @@ This de-identified code release focuses on the imaging feature engineering and r
    Helper scripts for downstream integration into hybrid tabular models (clinical + morphology + DL features)
 
 # Example scripts (de-identified)
+
    dcr_surgery_morph_features_extraction.py
    
    extract_nnunet_embeddings.py
@@ -38,6 +42,7 @@ This de-identified code release focuses on the imaging feature engineering and r
    maxilla_thickness_axial_half_surgery.py
 
 # System Requirements
+
 1. Hardware Requirements:
    
    GPU: NVIDIA GPU with ≥ 8GB VRAM (Recommended: RTX 3080 or A100);
@@ -83,10 +88,15 @@ data/
 
 # Performance Evaluation
 DeepDCR was evaluated on two binary tasks:
+
    1.Surgical difficulty prediction
+   
       Difficult vs normal (based on surgeon-specific operative-time percentile threshold)
+      
    2.6-month outcome prediction
+   
       Failure vs success (based on follow-up patency/recurrence criteria)
+      
 The manuscript describes a retrospective multi-center study design and external validation strategy in detail.
 
 # Contributing
@@ -106,4 +116,5 @@ If you use this code or adapt parts of the feature engineering / embedding extra
 
 # Code availability statement
 The de-identified code for feature extraction, embedding extraction, and visualization used in the DeepDCR workflow is publicly available in this repository.
+
 Pretrained model weights are not publicly released.
