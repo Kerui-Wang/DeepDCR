@@ -1,0 +1,5 @@
+﻿workspace_dir: "./workspace"
+input_dir: "./workspace/input"
+output_dir: "./workspace/output"
+model_dir: "./models"
+report_dir: "./workspace/reports"

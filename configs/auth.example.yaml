@@ -1,0 +1,4 @@
+﻿users:
+  admin:
+    password_hash: "replace_with_secure_hash"
+    role: "admin"

@@ -1,120 +1,111 @@
-# DeepDCR: Multimodal Deep Learning for En-DCR Surgical Difficulty and Prognosis Stratification
-Code for DeepDCR, a CT-DCG–based multimodal AI framework for:
+﻿# DeepDCR: AI-assisted En-DCR surgical difficulty stratification from CT dacryocystography
 
-   Automated segmentation of surgically relevant anatomy for endoscopic dacryocystorhinostomy (En-DCR)
-   
-   Preoperative prediction of surgical difficulty (Normal vs Difficult)
-   
-   Preoperative prediction of 6-month postoperative outcome (Success vs Failure)
+![Python](https://img.shields.io/badge/Python-3.10-blue)
+![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
+![Research Use](https://img.shields.io/badge/Use-research--only-orange)
+![DeepDCR](https://img.shields.io/badge/DeepDCR-v1.0.0-teal)
+![Medical AI](https://img.shields.io/badge/Medical%20AI-CT--DCG-lightgrey)
 
-# Overview
-DeepDCR is a clinically oriented pipeline for primary acquired nasolacrimal duct obstruction (PANDO) based on preoperative CT dacryocystography (CT-DCG). The framework combines:
+DeepDCR is a research-use artificial intelligence framework for preoperative endonasal endoscopic dacryocystorhinostomy (En-DCR) planning from CT dacryocystography (CT-DCG). It combines two-stage 3D nnU-Net segmentation, segmentation-derived morphometric and bone-window thickness features, PCA-reduced nnU-Net encoder embeddings, clinical variables and a calibrated Linear SVM classifier to estimate case-level surgical difficulty.
 
-   1.Two-stage cascade nnU-Net segmentation (coarse localization + fine segmentation)
-   
-   2.Segmentation-derived handcrafted morphology and thickness features
-   
-   3.Deep learning embeddings extracted from a frozen nnU-Net encoder bottleneck
-   
-   4.Clinical variables
-   
-   5.A probability-calibrated Linear SVM (selected as final classifier in the study)
-   
-The design goal is to provide interpretable, leakage-aware, and surgery-relevant preoperative risk stratification for En-DCR case planning and triage.
+## Key functions
 
-# What is included in this code release
-This de-identified code release focuses on the imaging feature engineering and representation learning components, including:
+- Automated segmentation of the lacrimal sac, maxilla at the En-DCR site and ipsilateral nasal cavity / endonasal surgical corridor.
+- Morphometric and bone-window thickness feature extraction from predicted masks.
+- Deep imaging embedding extraction from the nnU-Net encoder bottleneck.
+- Calibrated surgical difficulty prediction.
+- Research-use DeepDCR Workstation for CT overlay, 3D segmentation, bone-window thickness mapping, structured feature review and modular report export.
 
-   Morphological feature extraction from segmentation masks (lacrimal / maxilla / nasal space)
-   
-   Surgery-relevant maxilla thickness visualization and measurement
-   
-   nnU-Net encoder embedding extraction with leakage-safe PCA fitting (fit on internal OOF only)
-   
-   Helper scripts for downstream integration into hybrid tabular models (clinical + morphology + DL features)
+## Repository contents
 
-# Example scripts (de-identified)
+| Folder or file | Description |
+|---|---|
+| `DeepDCR_segmentation/` | Segmentation workflow based on a two-stage 3D nnU-Net cascade. |
+| `DeepDCR_classification/` | Feature integration, model training, validation and inference scripts. |
+| `docs/` | Installation guide, feature definitions, model card, app guide and deployment notes. |
+| `configs/` | Public example configuration files and feature schema. |
+| `examples/` | Synthetic placeholder examples only. |
+| `assets/` | Public figures and software screenshots. |
+| `requirements.txt` | Python dependency list. |
 
-   dcr_surgery_morph_features_extraction.py
-   
-   extract_nnunet_embeddings.py
-   
-   maxilla_thickness_axial_half_surgery.py
+## Model overview
 
-# System Requirements
+DeepDCR follows a hybrid design:
 
-1. Hardware Requirements:
-   
-   GPU: NVIDIA GPU with ≥ 8GB VRAM (Recommended: RTX 3080 or A100);
-   
-   Memory: ≥ 16GB RAM;
-   
-   Storage: ≥ 10GB available space
-   
-2. Software Requirements:
-   
-   Operating System: Ubuntu 18.04+, Windows 10+, or macOS 12+;
-   
-   Python: 3.7-3.10
+1. CT-DCG preprocessing.
+2. Coarse full-field segmentation.
+3. Cropped high-resolution segmentation.
+4. Paste-back to original image space.
+5. Automated feature extraction.
+6. nnU-Net encoder embedding extraction and PCA reduction.
+7. Calibrated surgical difficulty prediction.
+8. Case-level visualization and report export.
 
-# Installation & Dependencies
-1. Clone Repository:
-   ```
-   git clone https://github.com/Kerui-Wang/DeepDCR.git
-   cd DeepDCR
-   ```
-2. Install Dependencies:
-   ```pip install -r requirements.txt```
-3. Download Model Weights:
-   
-   Pre-trained model weights are **not publicly available** in this repository.
-   
-   Upon reasonable request and **with permission from the authors**, model weights may be provided for academic research purposes only.
-   
-   Please contact the corresponding author (or the authors listed in the manuscript) to request access.
-   
-# Data Preparation
-Ensure the following directory structure:
-```
-data/
-├── train/
-│   ├── images/ (Raw CT images)
-│   └── labels/ (Segmentation annotations)
-├── test/
-│   ├── images/
-│   └── labels/
-└── clinical_data.csv (Clinical features)
-```
+## Input
 
-# Performance Evaluation
-DeepDCR was evaluated on two binary tasks:
+- De-identified preoperative CT-DCG data.
+- Basic clinical variables required by the prediction model.
 
-   1.Surgical difficulty prediction
-   
-      Difficult vs normal (based on surgeon-specific operative-time percentile threshold)
-      
-   2.6-month outcome prediction
-   
-      Failure vs success (based on follow-up patency/recurrence criteria)
-      
-The manuscript describes a retrospective multi-center study design and external validation strategy in detail.
+## Output
 
-# Contributing
-We welcome Issues and Pull Requests to improve this project.
+- Segmentation masks of surgery-relevant structures.
+- Morphometric and bone-window thickness measurements.
+- PCA-reduced deep imaging embeddings.
+- Calibrated surgical difficulty probability.
+- Structured case-level report.
 
-#  License
-This project is licensed under the MIT License. See LICENSE file for details.
+## Feature groups
 
-# Ethics Statement
-This research adheres to medical research ethics guidelines. All data were anonymized and approved by the institutional review board.
+| Group | Description |
+|---|---|
+| Clinical variables | Age, sex, surgical eye, symptom duration, Munk score, previous treatment history and systemic history. |
+| Lacrimal sac morphology | Volume, surface area, sphericity, equivalent diameter and elongation. |
+| Ipsilateral nasal corridor | Surgery-side nasal cavity / endonasal corridor volume, surface area and spatial relationship to the lacrimal sac. |
+| Maxilla and bone-window features | Ipsilateral maxilla morphology, peri-lacrimal bone burden and local bone-window thickness. |
+| Deep imaging embeddings | PCA-reduced features derived from the frozen nnU-Net encoder bottleneck. |
 
-# Disclaimer 
-This model is intended to assist clinical decision-making and should not replace professional medical judgment. Users should make final decisions based on clinical experience and individual patient circumstances.
+The nasal-cavity features used for prediction are ipsilateral, surgery-side features rather than bilateral nasal-cavity totals.
 
-# Citation
-If you use this code or adapt parts of the feature engineering / embedding extraction pipeline, please cite the associated DeepDCR study/manuscript (and the nnU-Net framework) as appropriate.
+## Research-use workstation
 
-# Code availability statement
-The de-identified code for feature extraction, embedding extraction, and visualization used in the DeepDCR workflow is publicly available in this repository.
+DeepDCR includes a secure research-use web workstation for case-level review. The workstation supports de-identified CT-DCG upload, CT-overlay visualization, interactive 3D segmentation, bone-window thickness mapping, structured feature tables, difficulty prediction and modular report export.
 
-Pretrained model weights are not publicly released.
+The workstation includes login authentication and access logging and is intended for institutional research review rather than autonomous clinical decision-making.
+
+## What is not included
+
+This repository does not contain:
+
+- Patient CT-DCG images.
+- Manual segmentation masks.
+- Identifiable clinical metadata.
+- Trained model weights.
+- Internal out-of-fold prediction tables.
+- Institutional file paths.
+- Access logs or uploaded cases.
+
+Model weights and de-identified data may be requested from the corresponding author for academic research, subject to institutional data-governance approval and data-transfer agreements.
+
+## Installation
+
+See [`docs/installation.md`](docs/installation.md).
+
+## Quick start
+
+See [`docs/quick_start.md`](docs/quick_start.md).
+
+## Feature definitions
+
+See [`docs/feature_definitions.md`](docs/feature_definitions.md).
+
+## Model card
+
+See [`docs/model_card.md`](docs/model_card.md).
+
+## Disclaimer
+
+DeepDCR is provided for research use only. It is not a certified medical device and is not intended for autonomous diagnosis, treatment selection or clinical decision-making. Any use of model outputs must be reviewed by qualified clinicians and validated under local institutional governance.
+
+## Citation
+
+If you use this repository, please cite the associated DeepDCR manuscript.

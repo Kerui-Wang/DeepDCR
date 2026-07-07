@@ -1,0 +1,7 @@
+﻿segmentation:
+  coarse_model: "Dataset102_CoarseMaxillaNasal"
+  fine_model: "Dataset103_FineCropped"
+
+classification:
+  difficulty_model: "A3_full_hybrid_LinearSVM_Cal"
+  outcome_model: "exploratory_6_month_failure_model"
