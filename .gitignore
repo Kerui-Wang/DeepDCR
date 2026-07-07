@@ -1,0 +1,48 @@
+﻿__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+.ipynb_checkpoints/
+
+# Patient-level data
+data/
+raw/
+labels/
+uploads/
+workspace/
+outputs/
+reports/
+logs/
+tmp/
+
+*.dcm
+*.nii
+*.nii.gz
+*.nrrd
+*.mha
+*.mhd
+
+# Model weights and private model objects
+*.pth
+*.pt
+*.ckpt
+*.joblib
+*.pkl
+
+# Patient-level tables
+*.xlsx
+*.xls
+*.csv
+
+# Private configs
+configs/auth.yaml
+configs/paths.yaml
+
+# Public examples and schema
+!configs/*.example.yaml
+!configs/feature_schema.json
+!examples/**/*.json
+!examples/**/*.md
+!examples/**/*.csv
+!docs/**/*.md
